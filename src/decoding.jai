@@ -343,12 +343,16 @@ serialize :: (cea: Cea) -> string {
 print :: (inst: Instruction) {
 	while mov := isa(inst, MOV) {
 		defer break;
+
+		dst_memory := false;
+
 		print("mov ");
 		while dst := isa(mov.dst, Reg) {
 			print("%", <<dst);
 			break;
 		}
 		while dst := isa(mov.dst, Cea) {
+			dst_memory = true;
 			print("[%", serialize(<<dst));
 			if mov.disp != 0 {
 				if mov.disp > 0 print(" + %", mov.disp);
@@ -358,6 +362,7 @@ print :: (inst: Instruction) {
 			break;
 		}
 		while dst := isa(mov.dst, MOV.Direct_Address) {
+			dst_memory = true;
 			print("[%]", <<dst);
 			break;
 		}
@@ -380,10 +385,14 @@ print :: (inst: Instruction) {
 			break;
 		}
 		while src := isa(mov.src, u16) {
+			if dst_memory
+				print("word ");
 			print("%", <<src);
 			break;
 		}
 		while src := isa(mov.src, u8) {
+			if dst_memory
+				print("byte ");
 			print("%", <<src);
 			break;
 		}
