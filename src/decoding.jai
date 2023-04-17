@@ -71,16 +71,36 @@ Conditional_Jump :: struct {
 	delta: s8;
 }
 
-MOV :: struct { using base: Binary_Op; name :: "mov"; }
-ADD :: struct { using base: Binary_Op; name :: "add"; }
-SUB :: struct { using base: Binary_Op; name :: "sub"; }
-CMP :: struct { using base: Binary_Op; name :: "cmp"; }
+MOV :: struct { #as using base: Binary_Op; name :: "mov"; }
+ADD :: struct { #as using base: Binary_Op; name :: "add"; }
+SUB :: struct { #as using base: Binary_Op; name :: "sub"; }
+CMP :: struct { #as using base: Binary_Op; name :: "cmp"; }
 
-JNZ :: struct { using base: Conditional_Jump; name :: "jnz"; };
-JE :: struct { using base: Conditional_Jump; name :: "je"; };
+JE :: struct { #as using base: Conditional_Jump; name :: "je"; }
+JL :: struct { #as using base: Conditional_Jump; name :: "jl"; }
+JLE :: struct { #as using base: Conditional_Jump; name :: "jle"; }
+JB :: struct { #as using base: Conditional_Jump; name :: "jb"; }
+JBE :: struct { #as using base: Conditional_Jump; name :: "jbe"; }
+JP :: struct { #as using base: Conditional_Jump; name :: "jp"; }
+JO :: struct { #as using base: Conditional_Jump; name :: "jo"; }
+JS :: struct { #as using base: Conditional_Jump; name :: "js"; }
+JNZ :: struct { #as using base: Conditional_Jump; name :: "jnz"; }
+JGE :: struct { #as using base: Conditional_Jump; name :: "jge"; }
+JG :: struct { #as using base: Conditional_Jump; name :: "jg"; }
+JNB :: struct { #as using base: Conditional_Jump; name :: "jnb"; }
+JA :: struct { #as using base: Conditional_Jump; name :: "ja"; }
+JNP :: struct { #as using base: Conditional_Jump; name :: "jnp"; }
+JNO :: struct { #as using base: Conditional_Jump; name :: "jno"; }
+JNS :: struct { #as using base: Conditional_Jump; name :: "jns"; }
+LOOP :: struct { #as using base: Conditional_Jump; name :: "loop"; }
+LOOPZ :: struct { #as using base: Conditional_Jump; name :: "loopz"; }
+LOOPNZ :: struct { #as using base: Conditional_Jump; name :: "loopnz"; }
+JCXZ :: struct { #as using base: Conditional_Jump; name :: "jcxz"; }
 
 Instruction :: Tagged_Union(
-	MOV, ADD, SUB, CMP, JNZ, JE
+	MOV, ADD, SUB, CMP,
+	JE, JL, JLE, JB, JBE, JP, JO, JS, JNZ, JGE, JG, JNB, JA, JNP, JNO, JNS, LOOP, LOOPZ, LOOPNZ,
+		JCXZ
 );
 
 binary_op_imm_acc :: (stream: *[] u8, $T: Type) -> T, bool {
@@ -435,6 +455,17 @@ mov_imm_r :: (stream: *[] u8) -> MOV, bool {
 	return mov, true;
 }
 
+cjmp :: (stream: *[] u8) -> $T, bool {
+	if stream.count < 2
+		return .{}, false;
+	
+	_ := next_u8(stream);
+
+	op: T;
+	op.delta = cast, no_check (s8) next_u8(stream);
+	return op, true;
+}
+
 Table_Entry_F :: #type (stream: *[] u8) -> Instruction, bool;
 wrap :: (f: #type (stream: *[] u8) -> ($T, bool), stream: *[] u8) -> Instruction, bool {
 	a, b := f(stream);
@@ -529,6 +560,27 @@ decode_instruction :: (stream: *[] u8) -> Instruction, bool {
 
 			.{ mask = "0011_10..", f = #bake_arguments wrap(f = cmp_rm_r) },
 			.{ mask = "0011_110.", f = #bake_arguments wrap(f = cmp_imm_acc) },
+
+			.{ mask = "0111_0100", f = #bake_arguments wrap(f = #bake_constants cjmp(T = JE)) },
+			.{ mask = "0111_1100", f = #bake_arguments wrap(f = #bake_constants cjmp(T = JL)) },
+			.{ mask = "0111_1110", f = #bake_arguments wrap(f = #bake_constants cjmp(T = JLE)) },
+			.{ mask = "0111_0010", f = #bake_arguments wrap(f = #bake_constants cjmp(T = JB)) },
+			.{ mask = "0111_0110", f = #bake_arguments wrap(f = #bake_constants cjmp(T = JBE)) },
+			.{ mask = "0111_1010", f = #bake_arguments wrap(f = #bake_constants cjmp(T = JP)) },
+			.{ mask = "0111_0000", f = #bake_arguments wrap(f = #bake_constants cjmp(T = JO)) },
+			.{ mask = "0111_1000", f = #bake_arguments wrap(f = #bake_constants cjmp(T = JS)) },
+			.{ mask = "0111_0101", f = #bake_arguments wrap(f = #bake_constants cjmp(T = JNZ)) },
+			.{ mask = "0111_1101", f = #bake_arguments wrap(f = #bake_constants cjmp(T = JGE)) },
+			.{ mask = "0111_1111", f = #bake_arguments wrap(f = #bake_constants cjmp(T = JG)) },
+			.{ mask = "0111_0011", f = #bake_arguments wrap(f = #bake_constants cjmp(T = JNB)) },
+			.{ mask = "0111_0111", f = #bake_arguments wrap(f = #bake_constants cjmp(T = JA)) },
+			.{ mask = "0111_1011", f = #bake_arguments wrap(f = #bake_constants cjmp(T = JNP)) },
+			.{ mask = "0111_0001", f = #bake_arguments wrap(f = #bake_constants cjmp(T = JNO)) },
+			.{ mask = "0111_1001", f = #bake_arguments wrap(f = #bake_constants cjmp(T = JNS)) },
+			.{ mask = "1110_0010", f = #bake_arguments wrap(f = #bake_constants cjmp(T = LOOP)) },
+			.{ mask = "1110_0001", f = #bake_arguments wrap(f = #bake_constants cjmp(T = LOOPZ)) },
+			.{ mask = "1110_0000", f = #bake_arguments wrap(f = #bake_constants cjmp(T = LOOPNZ)) },
+			.{ mask = "1110_0011", f = #bake_arguments wrap(f = #bake_constants cjmp(T = JCXZ)) },
 		];
 
 		match_mask :: (idx: u8, mask: string) -> bool {
@@ -598,7 +650,7 @@ serialize :: (cea: Cea) -> string {
 	return "??";
 }
 
-print_binary_op :: (op: $T) {
+print :: (op: $T/Binary_Op) {
 	dst_memory := false;
 
 	print("% ", op.name);
@@ -664,24 +716,18 @@ print_binary_op :: (op: $T) {
 	}
 }
 
+print :: (op: $T/Conditional_Jump) {
+	print("% $", op.name);
+	if op.delta >= -2 print("+");
+	print("%", op.delta + 2);
+}
+
 print :: (inst: Instruction) {
-	while mov := isa(inst, MOV) {
-		defer break;
-		print_binary_op(mov);
-	}
-
-	while add := isa(inst, ADD) {
-		defer break;
-		print_binary_op(add);
-	}
-
-	while sub := isa(inst, SUB) {
-		defer break;
-		print_binary_op(sub);
-	}
-
-	while cmp := isa(inst, CMP) {
-		defer break;
-		print_binary_op(cmp);
-	}
+	#insert #run -> string {
+		str := "";
+		for inst.value_types {
+			str = tprint("%\nwhile op := isa(inst, %) {\n defer break;\n print(<<op);\n}", str, it);
+		}
+		return str;
+	};
 }
