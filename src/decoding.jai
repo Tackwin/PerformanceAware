@@ -50,13 +50,21 @@ templates_base :: Template.[
 	.{ mask = "1010_001.", f = #run mov_acc_mem() },
 
 	.{ mask = "1000_00..", f = decode_immed },
+	.{ mask = "1101_00..", f = decode_shift },
+	.{ mask = "1111_011.", f = decode_grp1 },
 	.{ mask = "1111_111.", f = decode_grp2 },
 
 	.{ mask = "0000_00..", f = #run binary_op_rm_r(T = ADD) },
 	.{ mask = "0000_010.", f = #run binary_op_imm_acc(T = ADD) },
 
+	.{ mask = "0001_00..", f = #run binary_op_rm_r(T = ADC) },
+	.{ mask = "0001_010.", f = #run binary_op_imm_acc(T = ADC) },
+
 	.{ mask = "0010_10..", f = #run binary_op_rm_r(T = SUB) },
 	.{ mask = "0010_110.", f = #run binary_op_imm_acc(T = SUB) },
+
+	.{ mask = "0001_10..", f = #run binary_op_rm_r(T = SBB) },
+	.{ mask = "0001_110.", f = #run binary_op_imm_acc(T = SBB) },
 
 	.{ mask = "0011_10..", f = #run binary_op_rm_r(T = CMP) },
 	.{ mask = "0011_110.", f = #run binary_op_imm_acc(T = CMP) },
@@ -110,10 +118,35 @@ templates_base :: Template.[
 	.{ mask = "1001_1100", f = #run nullary(T = PUSHF) },
 	.{ mask = "1001_1101", f = #run nullary(T = POPF) },
 
+	.{ mask = "0100_0...", f = #run unary_r(T = INC) },
+	.{ mask = "0100_1...", f = #run unary_r(T = DEC) },
+
+	.{ mask = "0011_0111", f = #run nullary(T = AAA) },
+	.{ mask = "0010_0111", f = #run nullary(T = DAA) },
+
+	.{ mask = "0011_1111", f = #run nullary(T = AAS) },
+	.{ mask = "0010_1111", f = #run nullary(T = DAS) },
+
+	.{ mask = "1101_0100", f = #run nullary(T = AAM, EAT_2 = true) },
+	.{ mask = "1101_0101", f = #run nullary(T = AAD, EAT_2 = true) },
+
+	.{ mask = "1001_1000", f = #run nullary(T = CBW) },
+	.{ mask = "1001_1001", f = #run nullary(T = CWD) },
+
+];
+templates_grp1 :: Template.[
+	// .{ mask = "..00_0...", f = #run unary_rm(T = INC) },
+	// .{ mask = "..00_1...", f = #run unary_rm(T = DEC) },
+	.{ mask = "..01_0...", f = #run unary_rm(T = NOT) },
+	.{ mask = "..01_1...", f = #run unary_rm(T = NEG) },
+	.{ mask = "..10_0...", f = #run unary_rm(T = MUL) },
+	.{ mask = "..10_1...", f = #run unary_rm(T = IMUL) },
+	.{ mask = "..11_0...", f = #run unary_rm(T = DIV) },
+	.{ mask = "..11_1...", f = #run unary_rm(T = IDIV) },
 ];
 templates_grp2 :: Template.[
-	// .{ mask = "..00_0...", f = null },
-	// .{ mask = "..00_1...", f = null },
+	.{ mask = "..00_0...", f = #run unary_rm(T = INC) },
+	.{ mask = "..00_1...", f = #run unary_rm(T = DEC) },
 	// .{ mask = "..01_0...", f = null },
 	// .{ mask = "..01_1...", f = null },
 	// .{ mask = "..10_0...", f = null },
@@ -124,12 +157,22 @@ templates_grp2 :: Template.[
 templates_immed :: Template.[
 	.{ mask = "..00_0...", f = #run binary_op_imm_rm(T = ADD) },
 	// .{ mask = "..00_1...", f = null },
-	// .{ mask = "..01_0...", f = null },
-	// .{ mask = "..01_1...", f = null },
+	.{ mask = "..01_0...", f = #run binary_op_imm_rm(T = ADC) },
+	.{ mask = "..01_1...", f = #run binary_op_imm_rm(T = SBB) },
 	// .{ mask = "..10_0...", f = null },
 	.{ mask = "..10_1...", f = #run binary_op_imm_rm(T = SUB) },
 	// .{ mask = "..11_0...", f = null },
 	.{ mask = "..11_1...", f = #run binary_op_imm_rm(T = CMP) }
+];
+templates_shift :: Template.[
+	// .{ mask = "..00_0...", f = #run unary_rm(T = INC) },
+	// .{ mask = "..00_1...", f = #run unary_rm(T = DEC) },
+	// .{ mask = "..01_0...", f = null },
+	// .{ mask = "..01_1...", f = null },
+	// .{ mask = "..10_0...", f = null },
+	// .{ mask = "..10_1...", f = null },
+	// .{ mask = "..11_0...", f = push_rm },
+	// .{ mask = "..11_1...", f = null },
 ];
 
 #scope_export
@@ -185,12 +228,15 @@ Conditional_Jump :: struct {
 Unary_Op :: struct {
 	op: Tagged_Union(Reg, Cea, Direct_Address, u8, u16);
 
+	wide := false;
 	disp: s16;
 }
 
 MOV :: struct { #as using base: Binary_Op; name :: "mov"; }
 ADD :: struct { #as using base: Binary_Op; name :: "add"; }
+ADC :: struct { #as using base: Binary_Op; name :: "adc"; }
 SUB :: struct { #as using base: Binary_Op; name :: "sub"; }
+SBB :: struct { #as using base: Binary_Op; name :: "sbb"; }
 CMP :: struct { #as using base: Binary_Op; name :: "cmp"; }
 XCHG :: struct { #as using base: Binary_Op; name :: "xchg"; }
 IN :: struct { #as using base: Binary_Op; name :: "in"; };
@@ -201,6 +247,14 @@ LES :: struct { #as using base: Binary_Op; name :: "les"; };
 
 PUSH :: struct { #as using base: Unary_Op; name :: "push"; };
 POP :: struct { #as using base: Unary_Op; name :: "pop"; };
+INC :: struct { #as using base: Unary_Op; name :: "inc"; };
+DEC :: struct { #as using base: Unary_Op; name :: "dec"; };
+NEG :: struct { #as using base: Unary_Op; name :: "neg"; };
+MUL :: struct { #as using base: Unary_Op; name :: "mul"; };
+IMUL :: struct { #as using base: Unary_Op; name :: "imul"; };
+DIV :: struct { #as using base: Unary_Op; name :: "div"; };
+IDIV :: struct { #as using base: Unary_Op; name :: "idiv"; };
+NOT :: struct { #as using base: Unary_Op; name :: "not"; };
 
 JE :: struct { #as using base: Conditional_Jump; name :: "je"; }
 JL :: struct { #as using base: Conditional_Jump; name :: "jl"; }
@@ -228,13 +282,21 @@ LAHF :: struct { #as using base: Nullary_Op; name :: "lahf"; }
 SAHF :: struct { #as using base: Nullary_Op; name :: "sahf"; }
 PUSHF :: struct { #as using base: Nullary_Op; name :: "pushf"; }
 POPF :: struct { #as using base: Nullary_Op; name :: "popf"; }
+AAA :: struct { #as using base: Nullary_Op; name :: "aaa"; }
+DAA :: struct { #as using base: Nullary_Op; name :: "daa"; }
+AAS :: struct { #as using base: Nullary_Op; name :: "aas"; }
+DAS :: struct { #as using base: Nullary_Op; name :: "das"; }
+AAM :: struct { #as using base: Nullary_Op; name :: "aam"; }
+AAD :: struct { #as using base: Nullary_Op; name :: "aad"; }
+CBW :: struct { #as using base: Nullary_Op; name :: "cbw"; }
+CWD :: struct { #as using base: Nullary_Op; name :: "cwd"; }
 
 Instruction :: Tagged_Union(
-	PUSH, POP,
-	MOV, ADD, SUB, CMP, XCHG, IN, OUT, LEA, LDS, LES,
+	PUSH, POP, INC, DEC, NEG, MUL, IMUL, DIV, IDIV, NOT,
+	MOV, ADD, ADC, SUB, SBB, CMP, XCHG, IN, OUT, LEA, LDS, LES,
 	JE, JL, JLE, JB, JBE, JP, JO, JS, JNZ, JGE, JG, JNB, JA, JNP, JNO, JNS, LOOP, LOOPZ, LOOPNZ,
 		JCXZ,
-	XLAT, LAHF, SAHF, PUSHF, POPF
+	XLAT, LAHF, SAHF, PUSHF, POPF, AAA, DAA, AAS, DAS, AAM, AAD, CBW, CWD,
 );
 
 binary_op_imm_acc :: ($T: Type) -> Table_Entry_F {
@@ -429,6 +491,63 @@ binary_r_acc :: ($T: Type) -> Table_Entry_F {
 		return wrap(op), true;
 	};
 }
+
+unary_rm :: ($T: Type, $USE_W := true, $WW := 0) -> Table_Entry_F {
+	return (stream: *[] u8) -> Instruction, bool {
+		op: T;
+
+		if stream.count < 2
+			return wrap(op), false;
+
+		s0 := next_u8(stream);
+		s1 := next_u8(stream);
+
+		#if USE_W 
+			W := (s0 & 0b0000_0001) >> 0;
+		else
+			W := WW;
+		op.wide = ifx W > 0 then true else false;
+
+		MOD := (s1 & 0b1100_0000) >> 6;
+		RM := (s1 & 0b0000_0111) >> 0;
+
+		disp, direct_addr, mod_reg := decode_mod_rm(MOD, RM);
+		if mod_reg {
+			set(*op.op, cast(Reg) (2 * RM + W));
+			return wrap(op), true;
+		} else if direct_addr {
+			set(*op.op, cast(Direct_Address) next_u16(stream));
+		} else {
+			set(*op.op, cast(Cea) RM);
+			if disp == 8
+				op.disp = next_u8(stream);
+			if disp == 16
+				op.disp = cast, no_check(s16) next_u16(stream);
+		}
+
+		return wrap(op), true;
+	};
+}
+
+
+unary_r :: ($T: Type) -> Table_Entry_F {
+	return (stream: *[] u8) -> Instruction, bool {
+		op: T;
+
+		if stream.count < 1
+			return wrap(op), false;
+
+		s0 := next_u8(stream);
+
+		REG := (s0 & 0b0000_0111) >> 0;
+
+		set(*op.op, cast(Reg) (2 * REG + 1));
+
+		return wrap(op), true;
+	};
+}
+
+
 io_acc_imm :: ($T: Type, $D := 0) -> Table_Entry_F {
 	return (stream: *[] u8) -> Instruction, bool {
 		in: T;
@@ -490,12 +609,18 @@ io_acc_r :: ($T: Type, $D := 0) -> Table_Entry_F {
 	};
 }
 
-nullary :: ($T: Type) -> Table_Entry_F {
+nullary :: ($T: Type, $EAT_2 := false) -> Table_Entry_F {
 	return (stream: *[] u8) -> Instruction, bool {
 		op: T;
-		if stream.count < 1
-			return wrap(op), false;
+		#if EAT_2
+			if stream.count < 2
+				return wrap(op), false;
+		else
+			if stream.count < 1
+				return wrap(op), false;
 		s0 := next_u8(stream);
+		#if EAT_2
+			s1 := next_u8(stream);
 		return wrap(op), true;
 	};
 }
@@ -505,6 +630,7 @@ push_rm :: (stream: *[] u8) -> Instruction, bool {
 		return .{}, false;
 	
 	push: PUSH;
+	push.wide = true;
 	s0 := next_u8(stream);
 	s1 := next_u8(stream);
 
@@ -543,6 +669,7 @@ push_r :: (stream: *[] u8) -> Instruction, bool {
 	REG := (s0 & 0b0000_0111);
 
 	push: PUSH;
+	push.wide = true;
 	set(*push.op, cast(Reg) (1 + 2 * REG));
 
 	return wrap(push), true;
@@ -556,6 +683,7 @@ push_sr :: (stream: *[] u8) -> Instruction, bool {
 	REG := (s0 & 0b0001_1000) >> 3;
 
 	push: PUSH;
+	push.wide = true;
 	set(*push.op, cast(Reg) (REG + cast(u8) Reg.SS));
 	return wrap(push), true;
 }
@@ -565,6 +693,7 @@ pop_rm :: (stream: *[] u8) -> Instruction, bool {
 		return .{}, false;
 	
 	pop: POP;
+	pop.wide = true;
 	s0 := next_u8(stream);
 	s1 := next_u8(stream);
 
@@ -603,6 +732,7 @@ pop_r :: (stream: *[] u8) -> Instruction, bool {
 	REG := (s0 & 0b0000_0111);
 
 	pop: POP;
+	pop.wide = true;
 	set(*pop.op, cast(Reg) (1 + 2 * REG));
 
 	return wrap(pop), true;
@@ -616,6 +746,7 @@ pop_sr :: (stream: *[] u8) -> Instruction, bool {
 	REG := (s0 & 0b0001_1000) >> 3;
 
 	pop: POP;
+	pop.wide = true;
 	set(*pop.op, cast(Reg) (REG + cast(u8) Reg.ES));
 	return wrap(pop), true;
 }
@@ -733,11 +864,50 @@ decode_grp2 :: (stream: *[] u8) -> Instruction, bool {
 	a, b := jmp_table[stream.data[1]](stream);
 	return a, b;
 }
+decode_grp1 :: (stream: *[] u8) -> Instruction, bool {
+	jmp_table :: #run -> [256] Table_Entry_F {
+		table: [256] Table_Entry_F;
+		for templates_grp1 {
+			for i: 0..255 {
+				if match_mask(cast(u8) i, it.mask) {
+					table[i] = it.f;
+				}
+			}
+		}
+
+		return table;
+	};
+
+	if stream.count < 2
+		return .{}, false;
+	a, b := jmp_table[stream.data[1]](stream);
+	return a, b;
+}
 
 decode_immed :: (stream: *[] u8) -> Instruction, bool {
 	jmp_table :: #run -> [256] Table_Entry_F {
 		table: [256] Table_Entry_F;
 		for templates_immed {
+			for i: 0..255 {
+				if match_mask(cast(u8) i, it.mask) {
+					table[i] = it.f;
+				}
+			}
+		}
+
+		return table;
+	};
+
+	if stream.count < 2
+		return .{}, false;
+	a, b := jmp_table[stream.data[1]](stream);
+	return a, b;
+}
+
+decode_shift :: (stream: *[] u8) -> Instruction, bool {
+	jmp_table :: #run -> [256] Table_Entry_F {
+		table: [256] Table_Entry_F;
+		for templates_shift {
 			for i: 0..255 {
 				if match_mask(cast(u8) i, it.mask) {
 					table[i] = it.f;
@@ -879,14 +1049,17 @@ print :: (op: $T/Conditional_Jump) {
 	else print(" - %", -(op.delta + 2));
 }
 
-print :: (op: PUSH) {
-	print("push ");
+print :: (op: $T/Unary_Op) {
+	print("% ", op.name);
 	while reg := isa(op.op, Reg) {
 		print("%", <<reg);
 		break;
 	}
 	while reg := isa(op.op, Cea) {
-		print("word [%", serialize(<<reg));
+		if op.wide print("word ");
+		else       print("byte ");
+		
+		print("[%", serialize(<<reg));
 		if op.disp != 0 {
 			if op.disp > 0 print(" + %", op.disp);
 			if op.disp < 0 print(" - %", -op.disp);
@@ -895,27 +1068,9 @@ print :: (op: PUSH) {
 		break;
 	}
 	while reg := isa(op.op, Direct_Address) {
-		print("word [%]", <<reg);
-		break;
-	}
-}
-print :: (op: POP) {
-	print("push ");
-	while reg := isa(op.op, Reg) {
-		print("%", <<reg);
-		break;
-	}
-	while reg := isa(op.op, Cea) {
-		print("word [%", serialize(<<reg));
-		if op.disp != 0 {
-			if op.disp > 0 print(" + %", op.disp);
-			if op.disp < 0 print(" - %", -op.disp);
-		}
-		print("]");
-		break;
-	}
-	while reg := isa(op.op, Direct_Address) {
-		print("word [%]", <<reg);
+		if op.wide print("word ");
+		else       print("byte ");
+		print("[%]", <<reg);
 		break;
 	}
 }
