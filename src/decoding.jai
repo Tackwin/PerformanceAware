@@ -66,7 +66,7 @@ Direct_Address :: #type,distinct u16;
 
 Binary_Op :: struct {
 	src: Tagged_Union(Reg, Cea, Direct_Address, u8, u16);
-	dst: Tagged_Union(Reg, Cea, Direct_Address);
+	dst: Tagged_Union(Reg, Cea, Direct_Address, u8);
 
 	disp: s16;
 }
@@ -85,9 +85,13 @@ MOV :: struct { #as using base: Binary_Op; name :: "mov"; }
 ADD :: struct { #as using base: Binary_Op; name :: "add"; }
 SUB :: struct { #as using base: Binary_Op; name :: "sub"; }
 CMP :: struct { #as using base: Binary_Op; name :: "cmp"; }
+XCHG :: struct { #as using base: Binary_Op; name :: "xchg"; }
+IN :: struct { #as using base: Binary_Op; name :: "in"; };
+OUT :: struct { #as using base: Binary_Op; name :: "out"; };
 
 PUSH :: struct { #as using base: Unary_Op; name :: "push"; };
 POP :: struct { #as using base: Unary_Op; name :: "pop"; };
+
 
 JE :: struct { #as using base: Conditional_Jump; name :: "je"; }
 JL :: struct { #as using base: Conditional_Jump; name :: "jl"; }
@@ -112,7 +116,7 @@ JCXZ :: struct { #as using base: Conditional_Jump; name :: "jcxz"; }
 
 Instruction :: Tagged_Union(
 	PUSH, POP,
-	MOV, ADD, SUB, CMP,
+	MOV, ADD, SUB, CMP, XCHG, IN, OUT,
 	JE, JL, JLE, JB, JBE, JP, JO, JS, JNZ, JGE, JG, JNB, JA, JNP, JNO, JNS, LOOP, LOOPZ, LOOPNZ,
 		JCXZ
 );
@@ -137,7 +141,7 @@ binary_op_imm_acc :: (stream: *[] u8, $T: Type) -> T, bool {
 
 	return op, true;
 }
-binary_op_imm_rm :: (stream: *[] u8, $T: Type) -> T, bool {
+binary_op_imm_rm :: (stream: *[] u8, $T: Type, $USE_S := true) -> T, bool {
 	op: T;
 	
 	if stream.count < 3
@@ -146,7 +150,10 @@ binary_op_imm_rm :: (stream: *[] u8, $T: Type) -> T, bool {
 	s0 := next_u8(stream);
 	s1 := next_u8(stream);
 
-	S := (s0 & 0b0000_0010) >> 1;
+	#if USE_S
+		S := (s0 & 0b0000_0010) >> 1;
+	else
+		S := 0;
 
 	W := (s0 & 0b0000_0001) >> 0;
 
@@ -202,72 +209,7 @@ binary_op_imm_rm :: (stream: *[] u8, $T: Type) -> T, bool {
 
 	return op, true;
 }
-binary_op_imm_rm_no_s :: (stream: *[] u8, $T: Type) -> T, bool {
-	op: T;
-	
-	if stream.count < 3
-		return op, false;
-	
-	s0 := next_u8(stream);
-	s1 := next_u8(stream);
-
-	S := 0;
-
-	W := (s0 & 0b0000_0001) >> 0;
-
-	MOD := (s1 & 0b1100_0000) >> 6;
-	RM := (s1 & 0b0000_0111) >> 0;
-	
-	disp, direct_addr, mod_reg := decode_mod_rm(MOD, RM);
-
-	if mod_reg {
-		set(*op.dst, cast(Reg) (W + 2 *  RM));
-	} else {
-		if direct_addr {
-			set(*op.dst, cast(Direct_Address) next_u16(stream));
-		} else {
-			set(*op.dst, cast(Cea) RM);
-		}
-
-		if disp == 8
-		{
-			op.disp = next_u8(stream);
-			if op.disp & 0b1000_0000
-				op.disp |= 0b1111_1111_0000_0000;
-		}
-		if disp == 16
-			op.disp = cast, no_check(s16) next_u16(stream);
-	}
-
-	if S == 0 {
-		if W == 0 {
-			if stream.count < 1
-				return op, false;
-			set(*op.src, next_u8(stream));
-		} else {
-			if stream.count < 2
-				return op, false;
-			set(*op.src, next_u16(stream));
-		}
-	} else {
-		if W == 0 {
-			if stream.count < 1
-				return op, false;
-			set(*op.src, next_u8(stream));
-		} else {
-			if stream.count < 1
-				return op, false;
-			data := cast(u16) next_u8(stream);
-			if data & 0b0000_0000_1000_0000
-				data |= 0b1111_1111_0000_0000;
-
-			set(*op.src, data);
-		}
-	}
-
-	return op, true;
-}
-binary_op_rm_r :: (stream: *[] u8, $T: Type) -> T, bool {
+binary_op_rm_r :: (stream: *[] u8, $T: Type, $USE_D : bool = true) -> T, bool {
 	op: T;
 
 	if stream.count < 2
@@ -276,7 +218,10 @@ binary_op_rm_r :: (stream: *[] u8, $T: Type) -> T, bool {
 	s0 := next_u8(stream);
 	s1 := next_u8(stream);
 
-	D := (s0 & 0b0000_0010) >> 1;
+	#if USE_D
+		D := (s0 & 0b0000_0010) >> 1;
+	else
+		D := 0;
 	W := (s0 & 0b0000_0001) >> 0;
 
 	MOD := (s1 & 0b1100_0000) >> 6;
@@ -345,6 +290,78 @@ decode_mod_rm :: (MOD: u8, RM: u8) -> u8, bool, bool {
 	return disp, direct_addr, mod_reg;
 }
 
+binary_r_acc :: (stream: *[] u8, $T: Type) -> T, bool {
+	op: T;
+
+	if stream.count < 1
+		return op, false;
+
+	s0 := next_u8(stream);
+
+	REG := s0 & 0b0000_0111;
+
+	set(*op.src, cast(Reg) REG);
+	set(*op.dst, Reg.AX);
+
+	return op, true;
+}
+io_acc_imm :: (stream: *[] u8, $T: Type, $D := 0) -> T, bool {
+	in: T;
+
+	if stream.count < 2
+		return in, false;
+
+	s0 := next_u8(stream);
+	s1 := next_u8(stream);
+
+	W := (s0 & 0b0000_0001) >> 0;
+
+	if W == 0 {
+		set(*in.dst, cast(Reg) Reg.AL);
+	} else {
+		set(*in.dst, cast(Reg) Reg.AX);
+	}
+
+	set(*in.src, cast(u8) s1);
+
+	#if D {
+		t: Instruction;
+		memcpy(*t, *in.src, size_of(Instruction));
+		memcpy(*in.src, *in.dst, size_of(Instruction));
+		memcpy(*in.dst, *t, size_of(Instruction));
+	}
+
+	return in, true;
+}
+
+io_acc_r :: (stream: *[] u8, $T: Type, $D := 0) -> T, bool {
+	in: T;
+
+	if stream.count < 1
+		return in, false;
+
+	s0 := next_u8(stream);
+
+	W := (s0 & 0b0000_0001) >> 0;
+
+	if W == 0 {
+		set(*in.dst, cast(Reg) Reg.AL);
+	} else {
+		set(*in.dst, cast(Reg) Reg.AX);
+	}
+
+	set(*in.src, cast(Reg) Reg.DX);
+	
+	#if D {
+		t: Instruction;
+		memcpy(*t, *in.src, size_of(Instruction));
+		memcpy(*in.src, *in.dst, size_of(Instruction));
+		memcpy(*in.dst, *t, size_of(Instruction));
+	}
+
+	return in, true;
+}
+
 sub_imm_acc :: #bake_arguments binary_op_imm_acc(T = SUB);
 sub_imm_rm :: #bake_arguments binary_op_imm_rm(T = SUB);
 sub_rm_r :: #bake_arguments binary_op_rm_r(T = SUB);
@@ -357,8 +374,17 @@ cmp_imm_acc :: #bake_arguments binary_op_imm_acc(T = CMP);
 cmp_imm_rm :: #bake_arguments binary_op_imm_rm(T = CMP);
 cmp_rm_r :: #bake_arguments binary_op_rm_r(T = CMP);
 
-mov_imm_rm :: #bake_arguments binary_op_imm_rm_no_s(T = MOV);
+mov_imm_rm :: #bake_arguments binary_op_imm_rm(T = MOV, USE_S = false);
 mov_rm_r :: #bake_arguments binary_op_rm_r(T = MOV);
+
+xchg_rm_r :: #bake_arguments binary_op_rm_r(T = XCHG, USE_D = false);
+xchg_r_acc :: #bake_arguments binary_r_acc(T = XCHG);
+
+in_acc_imm :: #bake_arguments io_acc_imm(T = IN);
+in_acc_r :: #bake_arguments io_acc_r(T = IN);
+
+out_acc_imm :: #bake_arguments io_acc_imm(T = OUT, D = 1);
+out_acc_r :: #bake_arguments io_acc_r(T = OUT, D = 1);
 
 push_rm :: (stream: *[] u8) -> PUSH, bool {
 	if stream.count < 2
@@ -560,7 +586,7 @@ cjmp :: (stream: *[] u8) -> $T, bool {
 }
 
 Table_Entry_F :: #type (stream: *[] u8) -> Instruction, bool;
-wrap :: (f: #type (stream: *[] u8) -> ($T, bool), stream: *[] u8) -> Instruction, bool {
+wrap :: (f: $T, stream: *[] u8) -> Instruction, bool {
 	a, b := f(stream);
 	inst: Instruction;
 	set(*inst, a);
@@ -743,6 +769,15 @@ decode_instruction :: (stream: *[] u8) -> Instruction, bool {
 
 			.{ mask = "0101_1...", f = #bake_arguments wrap(f = pop_r) },
 			.{ mask = "000._.111", f = #bake_arguments wrap(f = pop_sr) },
+
+			.{ mask = "1000_011.", f = #bake_arguments wrap(f = xchg_rm_r) },
+			.{ mask = "1001_0...", f = #bake_arguments wrap(f = xchg_r_acc) },
+
+			.{ mask = "1110_010.", f = #bake_arguments wrap(f = in_acc_imm) },
+			.{ mask = "1110_110.", f = #bake_arguments wrap(f = in_acc_r) },
+			
+			.{ mask = "1110_011.", f = #bake_arguments wrap(f = out_acc_imm) },
+			.{ mask = "1110_111.", f = #bake_arguments wrap(f = out_acc_r) },
 		];
 
 		match_mask :: (idx: u8, mask: string) -> bool {
@@ -844,6 +879,10 @@ print :: (op: $T/Binary_Op) {
 
 		dst_memory = true;
 		print("[%]", <<dst);
+		break;
+	}
+	while dst := isa(op.dst, u8) {
+		print("%", <<dst);
 		break;
 	}
 	print(", ");
