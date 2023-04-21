@@ -46,6 +46,10 @@ Reg :: enum {
 	SI :: 13;
 	BH :: 14;
 	DI :: 15;
+	ES :: 16;
+	CS :: 17;
+	SS :: 18;
+	DS :: 19;
 };
 
 Cea :: enum {
@@ -71,10 +75,19 @@ Conditional_Jump :: struct {
 	delta: s8;
 }
 
+Unary_Op :: struct {
+	op: Tagged_Union(Reg, Cea, Direct_Address, u8, u16);
+
+	disp: s16;
+}
+
 MOV :: struct { #as using base: Binary_Op; name :: "mov"; }
 ADD :: struct { #as using base: Binary_Op; name :: "add"; }
 SUB :: struct { #as using base: Binary_Op; name :: "sub"; }
 CMP :: struct { #as using base: Binary_Op; name :: "cmp"; }
+
+PUSH :: struct { #as using base: Unary_Op; name :: "push"; };
+POP :: struct { #as using base: Unary_Op; name :: "pop"; };
 
 JE :: struct { #as using base: Conditional_Jump; name :: "je"; }
 JL :: struct { #as using base: Conditional_Jump; name :: "jl"; }
@@ -98,6 +111,7 @@ LOOPNZ :: struct { #as using base: Conditional_Jump; name :: "loopnz"; }
 JCXZ :: struct { #as using base: Conditional_Jump; name :: "jcxz"; }
 
 Instruction :: Tagged_Union(
+	PUSH, POP,
 	MOV, ADD, SUB, CMP,
 	JE, JL, JLE, JB, JBE, JP, JO, JS, JNZ, JGE, JG, JNB, JA, JNP, JNO, JNS, LOOP, LOOPZ, LOOPNZ,
 		JCXZ
@@ -139,28 +153,7 @@ binary_op_imm_rm :: (stream: *[] u8, $T: Type) -> T, bool {
 	MOD := (s1 & 0b1100_0000) >> 6;
 	RM := (s1 & 0b0000_0111) >> 0;
 	
-	disp := 0;
-	direct_addr := false;
-	mod_reg := false;
-
-	if MOD == {
-		case 0b00;
-			if RM == 0b110 {
-				direct_addr = true;
-				if stream.count < 2
-					return op, false;
-			}
-		case 0b01;
-			disp = 8;
-			if stream.count < 1
-				return op, false;
-		case 0b10;
-			disp = 16;
-			if stream.count < 2
-				return op, false;
-		case 0b11;
-			mod_reg = true;
-	}
+	disp, direct_addr, mod_reg := decode_mod_rm(MOD, RM);
 
 	if mod_reg {
 		set(*op.dst, cast(Reg) (W + 2 *  RM));
@@ -225,28 +218,7 @@ binary_op_imm_rm_no_s :: (stream: *[] u8, $T: Type) -> T, bool {
 	MOD := (s1 & 0b1100_0000) >> 6;
 	RM := (s1 & 0b0000_0111) >> 0;
 	
-	disp := 0;
-	direct_addr := false;
-	mod_reg := false;
-
-	if MOD == {
-		case 0b00;
-			if RM == 0b110 {
-				direct_addr = true;
-				if stream.count < 2
-					return op, false;
-			}
-		case 0b01;
-			disp = 8;
-			if stream.count < 1
-				return op, false;
-		case 0b10;
-			disp = 16;
-			if stream.count < 2
-				return op, false;
-		case 0b11;
-			mod_reg = true;
-	}
+	disp, direct_addr, mod_reg := decode_mod_rm(MOD, RM);
 
 	if mod_reg {
 		set(*op.dst, cast(Reg) (W + 2 *  RM));
@@ -311,28 +283,7 @@ binary_op_rm_r :: (stream: *[] u8, $T: Type) -> T, bool {
 	REG := (s1 & 0b0011_1000) >> 3;
 	RM := (s1 & 0b0000_0111) >> 0;
 
-	disp := 0;
-	direct_addr := false;
-	mod_reg := false;
-
-	if MOD == {
-		case 0b00;
-			if RM == 0b110 {
-				direct_addr = true;
-				if stream.count < 2
-					return op, false;
-			}
-		case 0b01;
-			disp = 8;
-			if stream.count < 1
-				return op, false;
-		case 0b10;
-			disp = 16;
-			if stream.count < 2
-				return op, false;
-		case 0b11;
-			mod_reg = true;
-	}
+	disp, direct_addr, mod_reg := decode_mod_rm(MOD, RM);
 
 	if mod_reg {
 		if D == 0 {
@@ -373,6 +324,27 @@ binary_op_rm_r :: (stream: *[] u8, $T: Type) -> T, bool {
 	return op, true;
 }
 
+decode_mod_rm :: (MOD: u8, RM: u8) -> u8, bool, bool {
+	disp: u8;
+	direct_addr := false;
+	mod_reg := false;
+	
+	if MOD == {
+		case 0b00;
+			if RM == 0b110 {
+				direct_addr = true;
+			}
+		case 0b01;
+			disp = 8;
+		case 0b10;
+			disp = 16;
+		case 0b11;
+			mod_reg = true;
+	}
+
+	return disp, direct_addr, mod_reg;
+}
+
 sub_imm_acc :: #bake_arguments binary_op_imm_acc(T = SUB);
 sub_imm_rm :: #bake_arguments binary_op_imm_rm(T = SUB);
 sub_rm_r :: #bake_arguments binary_op_rm_r(T = SUB);
@@ -387,6 +359,127 @@ cmp_rm_r :: #bake_arguments binary_op_rm_r(T = CMP);
 
 mov_imm_rm :: #bake_arguments binary_op_imm_rm_no_s(T = MOV);
 mov_rm_r :: #bake_arguments binary_op_rm_r(T = MOV);
+
+push_rm :: (stream: *[] u8) -> PUSH, bool {
+	if stream.count < 2
+		return .{}, false;
+	
+	push: PUSH;
+	s0 := next_u8(stream);
+	s1 := next_u8(stream);
+
+	MOD := (s1 & 0b1100_0000) >> 6;
+	RM := (s1 & 0b0000_0111) >> 0;
+
+	disp, direct_addr, mod_reg := decode_mod_rm(MOD, RM);
+
+	if mod_reg {
+		set(*push.op, cast(Reg) (1 + 2 *  RM));
+	} else {
+		if direct_addr {
+			set(*push.op, cast(Direct_Address) next_u16(stream));
+		} else {
+			set(*push.op, cast(Cea) RM);
+		}
+
+		if disp == 8
+		{
+			push.disp = next_u8(stream);
+			if push.disp & 0b1000_0000
+				push.disp |= 0b1111_1111_0000_0000;
+		}
+		if disp == 16
+			push.disp = cast, no_check(s16) next_u16(stream);
+	}
+
+	return push, true;
+}
+push_r :: (stream: *[] u8) -> PUSH, bool {
+	if stream.count < 1
+		return .{}, false;
+	
+	s0 := next_u8(stream);
+
+	REG := (s0 & 0b0000_0111);
+
+	push: PUSH;
+	set(*push.op, cast(Reg) (1 + 2 * REG));
+
+	return push, true;
+}
+push_sr :: (stream: *[] u8) -> PUSH, bool {
+	if stream.count < 1
+		return .{}, false;
+	
+	s0 := next_u8(stream);
+
+	REG := (s0 & 0b0001_1000) >> 3;
+
+	push: PUSH;
+	set(*push.op, cast(Reg) (REG + cast(u8) Reg.SS));
+	return push, true;
+}
+
+pop_rm :: (stream: *[] u8) -> POP, bool {
+	if stream.count < 2
+		return .{}, false;
+	
+	pop: POP;
+	s0 := next_u8(stream);
+	s1 := next_u8(stream);
+
+	MOD := (s1 & 0b1100_0000) >> 6;
+	RM := (s1 & 0b0000_0111) >> 0;
+
+	disp, direct_addr, mod_reg := decode_mod_rm(MOD, RM);
+
+	if mod_reg {
+		set(*pop.op, cast(Reg) (1 + 2 *  RM));
+	} else {
+		if direct_addr {
+			set(*pop.op, cast(Direct_Address) next_u16(stream));
+		} else {
+			set(*pop.op, cast(Cea) RM);
+		}
+
+		if disp == 8
+		{
+			pop.disp = next_u8(stream);
+			if pop.disp & 0b1000_0000
+				pop.disp |= 0b1111_1111_0000_0000;
+		}
+		if disp == 16
+			pop.disp = cast, no_check(s16) next_u16(stream);
+	}
+
+	return pop, true;
+}
+pop_r :: (stream: *[] u8) -> POP, bool {
+	if stream.count < 1
+		return .{}, false;
+	
+	s0 := next_u8(stream);
+
+	REG := (s0 & 0b0000_0111);
+
+	pop: POP;
+	set(*pop.op, cast(Reg) (1 + 2 * REG));
+
+	return pop, true;
+}
+pop_sr :: (stream: *[] u8) -> POP, bool {
+	if stream.count < 1
+		return .{}, false;
+	
+	s0 := next_u8(stream);
+
+	REG := (s0 & 0b0001_1000) >> 3;
+
+	pop: POP;
+	set(*pop.op, cast(Reg) (REG + cast(u8) Reg.ES));
+	return pop, true;
+}
+
 
 mov_mem_acc :: (stream: *[] u8) -> MOV, bool {
 	mov: MOV;
@@ -474,6 +567,66 @@ wrap :: (f: #type (stream: *[] u8) -> ($T, bool), stream: *[] u8) -> Instruction
 	return inst, b;
 }
 
+decode_grp2 :: (stream: *[] u8) -> Instruction, bool {
+	jmp_table :: #run -> [256] Table_Entry_F {
+
+		match_mask :: (idx: u8, mask: string) -> bool {
+			assert(mask.count == 9);
+
+			if mask[8] != #char "." && ((idx & 0b0000_0001) >> 0) != (mask[8] - #char "0")
+				return false;
+			if mask[7] != #char "." && ((idx & 0b0000_0010) >> 1) != (mask[7] - #char "0")
+				return false;
+			if mask[6] != #char "." && ((idx & 0b0000_0100) >> 2) != (mask[6] - #char "0")
+				return false;
+			if mask[5] != #char "." && ((idx & 0b0000_1000) >> 3) != (mask[5] - #char "0")
+				return false;
+
+			if mask[3] != #char "." && ((idx & 0b0001_0000) >> 4) != (mask[3] - #char "0")
+				return false;
+			if mask[2] != #char "." && ((idx & 0b0010_0000) >> 5) != (mask[2] - #char "0")
+				return false;
+			if mask[1] != #char "." && ((idx & 0b0100_0000) >> 6) != (mask[1] - #char "0")
+				return false;
+			if mask[0] != #char "." && ((idx & 0b1000_0000) >> 7) != (mask[0] - #char "0")
+				return false;
+			return true;
+		}
+
+		
+		Template :: struct {
+			mask: string;
+			f: Table_Entry_F;
+		}
+		templates := Template.[
+			.{ mask = "..00_0...", f = null },
+			.{ mask = "..00_1...", f = null },
+			.{ mask = "..01_0...", f = null },
+			.{ mask = "..01_1...", f = null },
+			.{ mask = "..10_0...", f = null },
+			.{ mask = "..10_1...", f = null },
+			.{ mask = "..11_0...", f = #bake_arguments wrap(f = push_rm) },
+			.{ mask = "..11_1...", f = null },
+		];
+
+		table: [256] Table_Entry_F;
+		for templates {
+			for i: 0..255 {
+				if match_mask(cast(u8) i, it.mask) {
+					table[i] = it.f;
+				}
+			}
+		}
+
+		return table;
+	};
+
+	if stream.count < 2
+		return .{}, false;
+	a, b := jmp_table[stream.data[1]](stream);
+	return a, b;
+}
+
 decode_immed :: (stream: *[] u8) -> Instruction, bool {
 	jmp_table :: #run -> [256] Table_Entry_F {
 
@@ -551,6 +704,7 @@ decode_instruction :: (stream: *[] u8) -> Instruction, bool {
 			.{ mask = "1010_001.", f = #bake_arguments wrap(f = mov_acc_mem) },
 
 			.{ mask = "1000_00..", f = decode_immed },
+			.{ mask = "1111_111.", f = decode_grp2 },
 
 			.{ mask = "0000_00..", f = #bake_arguments wrap(f = add_rm_r) },
 			.{ mask = "0000_010.", f = #bake_arguments wrap(f = add_imm_acc) },
@@ -581,6 +735,14 @@ decode_instruction :: (stream: *[] u8) -> Instruction, bool {
 			.{ mask = "1110_0001", f = #bake_arguments wrap(f = #bake_constants cjmp(T = LOOPZ)) },
 			.{ mask = "1110_0000", f = #bake_arguments wrap(f = #bake_constants cjmp(T = LOOPNZ)) },
 			.{ mask = "1110_0011", f = #bake_arguments wrap(f = #bake_constants cjmp(T = JCXZ)) },
+
+			.{ mask = "1000_1111", f = #bake_arguments wrap(f = pop_rm) },
+
+			.{ mask = "0101_0...", f = #bake_arguments wrap(f = push_r) },
+			.{ mask = "000._.110", f = #bake_arguments wrap(f = push_sr) },
+
+			.{ mask = "0101_1...", f = #bake_arguments wrap(f = pop_r) },
+			.{ mask = "000._.111", f = #bake_arguments wrap(f = pop_sr) },
 		];
 
 		match_mask :: (idx: u8, mask: string) -> bool {
@@ -718,8 +880,49 @@ print :: (op: $T/Binary_Op) {
 
 print :: (op: $T/Conditional_Jump) {
 	print("% $", op.name);
-	if op.delta >= -2 print("+");
-	print("%", op.delta + 2);
+	if op.delta >= -2 print(" + %", op.delta + 2);
+	else print(" - %", -(op.delta + 2));
+}
+
+print :: (op: PUSH) {
+	print("push ");
+	while reg := isa(op.op, Reg) {
+		print("%", <<reg);
+		break;
+	}
+	while reg := isa(op.op, Cea) {
+		print("word [%", serialize(<<reg));
+		if op.disp != 0 {
+			if op.disp > 0 print(" + %", op.disp);
+			if op.disp < 0 print(" - %", -op.disp);
+		}
+		print("]");
+		break;
+	}
+	while reg := isa(op.op, Direct_Address) {
+		print("word [%]", <<reg);
+		break;
+	}
+}
+print :: (op: POP) {
+	print("push ");
+	while reg := isa(op.op, Reg) {
+		print("%", <<reg);
+		break;
+	}
+	while reg := isa(op.op, Cea) {
+		print("word [%", serialize(<<reg));
+		if op.disp != 0 {
+			if op.disp > 0 print(" + %", op.disp);
+			if op.disp < 0 print(" - %", -op.disp);
+		}
+		print("]");
+		break;
+	}
+	while reg := isa(op.op, Direct_Address) {
+		print("word [%]", <<reg);
+		break;
+	}
 }
 
 print :: (inst: Instruction) {
