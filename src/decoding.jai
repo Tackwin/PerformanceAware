@@ -1,5 +1,7 @@
 #import "Basic";
+#import "Compiler";
 #import "Tagged_Union";
+
 
 next_u8 :: (stream: *[] u8) -> u8 {
 	if stream.count == 0
@@ -170,6 +172,16 @@ templates_base :: Template.[
 	.{ mask = "1001_1011", f = #run nullary(T = WAIT) },
 	.{ mask = "1111_0000", f = #run nullary(T = LOCK) },
 
+	.{ mask = "001._.110", f = segment_op },
+
+	.{ mask = "1001_1010", f = #run jump_seg_op(T = CALL) },
+	.{ mask = "1110_1010", f = #run jump_seg_op(T = JMP) },
+
+	.{ mask = "1000_11.0", f = #run mov_sr_rm() },
+
+	.{ mask = "1110_1000", f = #run jump_direct(T = CALL, W = true, S = true) },
+	.{ mask = "1110_1001", f = #run jump_direct(T = JMP, W = true, S = true) },
+	.{ mask = "1110_1011", f = #run jump_direct(T = JMP, W = false, S = true) },
 ];
 templates_grp1 :: Template.[
 	.{ mask = "..00_0...", f = #run binary_op_imm_rm(T = TEST) },
@@ -235,6 +247,7 @@ Reg :: enum {
 	CS :: 17;
 	SS :: 18;
 	DS :: 19;
+	None;
 };
 
 Cea :: enum {
@@ -246,8 +259,51 @@ Cea :: enum {
 	DI :: 5;
 	BP :: 6;
 	BX :: 7;
+
+	ES;
+	ES_BX_SI :: ES;
+	ES_BX_DI;
+	ES_BP_SI;
+	ES_BP_DI;
+	ES_SI;
+	ES_DI;
+	ES_BP;
+	ES_BX;
+
+	CS;
+	CS_BX_SI :: CS;
+	CS_BX_DI;
+	CS_BP_SI;
+	CS_BP_DI;
+	CS_SI;
+	CS_DI;
+	CS_BP;
+	CS_BX;
+
+	SS;
+	SS_BX_SI :: SS;
+	SS_BX_DI;
+	SS_BP_SI;
+	SS_BP_DI;
+	SS_SI;
+	SS_DI;
+	SS_BP;
+	SS_BX;
+
+	DS;
+	DS_BX_SI :: DS;
+	DS_BX_DI;
+	DS_BP_SI;
+	DS_BP_DI;
+	DS_SI;
+	DS_DI;
+	DS_BP;
+	DS_BX;
 };
-Direct_Address :: #type,distinct u16;
+Direct_Address :: struct {
+	addr: u16;
+	seg: Reg = .None;
+}
 
 Nullary_Op :: struct { }
 
@@ -268,7 +324,9 @@ Jump :: struct {
 	disp: s16;
 	far: bool;
 
-	src: Tagged_Union(Reg, Cea, Direct_Address, u8, u16);
+	has_direct_seg:= false;
+	direct_seg: u16;
+	src: Tagged_Union(Reg, Cea, Direct_Address, u8, u16, s16);
 }
 
 Unary_Op :: struct {
@@ -377,6 +435,7 @@ RCR :: struct { #as using base: Shift_Op; name :: "rcr"; }
 
 REP :: struct { #as using base: Prefix; name :: "rep"; Z := 0; }
 LOCK :: struct { #as using base: Prefix; name :: "lock"; }
+SEGMENT :: struct { #as using base: Prefix; name :: "segment"; reg: Reg; };
 
 MOVS :: struct {#as using base: String_Op; name :: "movs"; }
 CMPS :: struct {#as using base: String_Op; name :: "cmps"; }
@@ -402,6 +461,172 @@ Instruction :: Tagged_Union(
 	RET,
 	INT,
 );
+
+
+mov_sr_rm :: () -> Table_Entry_F {
+	return (stream: *[] u8) -> Instruction, bool {
+		mov: MOV;
+		
+		if stream.count < 2 {
+			return .{}, false;
+		}
+
+		s0 := next_u8(stream);
+		s1 := next_u8(stream);
+
+		D := (s0 & 0b0000_0010) >> 1;
+
+		MOD := (s1 & 0b1100_0000) >> 6;
+		SR := (s1 & 0b0001_1000) >> 3;
+		RM := s1 & 0b0000_0111;
+
+		disp, direct_addr, mod_reg := decode_mod_rm(MOD, RM);
+
+		set(*mov.src, cast(Reg) (SR + cast(u8) Reg.ES));
+
+		if mod_reg {
+			set(*mov.dst, cast(Reg) (2 * RM + 1));
+		} else {
+			if direct_addr {
+				if stream.count < 2
+					return .{}, false;
+				set(*mov.dst, Direct_Address.{ addr = next_u16(stream) });
+			} else {
+				set(*mov.dst, cast(Cea) RM);
+
+				if disp == 8 {
+					if stream.count < 1
+						return .{}, false;
+					mov.disp = next_u8(stream);
+				} else if disp == 16 {
+					if stream.count < 2
+						return .{}, false;
+					mov.disp = cast,no_check(s16) next_u16(stream);
+				}
+			}
+		}
+
+		return wrap(mov), true;
+	};
+}
+
+jump_seg_op :: ($T: Type) -> Table_Entry_F {
+	return (stream: *[] u8) -> Instruction, bool {
+		op: T;
+
+		if stream.count < 5
+			return .{}, false;
+
+		s0 := next_u8(stream);
+
+		op.far = true;
+		op.has_direct_seg = true;
+
+		set(*op.src, next_u16(stream));
+		op.direct_seg = next_u16(stream);
+
+		return wrap(op), true;
+	};
+}
+
+segment_op :: (stream: *[] u8) -> Instruction, bool {
+	seg: SEGMENT;
+
+	if stream.count < 1
+		return .{}, false;
+	
+	s0 := next_u8(stream);
+
+	seg.reg = cast(Reg) (cast(u8) Reg.ES + (s0 & 0b0001_1000) >> 3);
+
+	inst, ok := decode_instruction(stream);
+	if !ok
+		return inst, ok;
+
+	f :: (bop: *Binary_Op) #expand {
+		if isa(bop.src, Cea) {
+			if seg.reg == .ES then <<isa(bop.src, Cea) += .ES;
+			if seg.reg == .CS then <<isa(bop.src, Cea) += .CS;
+			if seg.reg == .SS then <<isa(bop.src, Cea) += .SS;
+			if seg.reg == .DS then <<isa(bop.src, Cea) += .DS;
+		}
+
+		if isa(bop.src, Direct_Address) {
+			isa(bop.src, Direct_Address).seg = seg.reg;
+		}
+
+		if isa(bop.dst, Cea) {
+			if seg.reg == .ES then <<isa(bop.dst, Cea) += .ES;
+			if seg.reg == .CS then <<isa(bop.dst, Cea) += .CS;
+			if seg.reg == .SS then <<isa(bop.dst, Cea) += .SS;
+			if seg.reg == .DS then <<isa(bop.dst, Cea) += .DS;
+		}
+
+		if isa(bop.dst, Direct_Address) {
+			isa(bop.dst, Direct_Address).seg = seg.reg;
+		}
+	}
+	f :: (jmp: *Jump) #expand {
+		if isa(jmp.src, Cea) {
+			if seg.reg == .ES then <<isa(jmp.src, Cea) += .ES;
+			if seg.reg == .CS then <<isa(jmp.src, Cea) += .CS;
+			if seg.reg == .SS then <<isa(jmp.src, Cea) += .SS;
+			if seg.reg == .DS then <<isa(jmp.src, Cea) += .DS;
+		}
+		
+		if isa(jmp.src, Direct_Address) {
+			isa(jmp.src, Direct_Address).seg = seg.reg;
+		}
+	}
+	f :: (uop: *Unary_Op) #expand {
+		if isa(uop.op, Cea) {
+			if seg.reg == .ES then <<isa(uop.op, Cea) += .ES;
+			if seg.reg == .CS then <<isa(uop.op, Cea) += .CS;
+			if seg.reg == .SS then <<isa(uop.op, Cea) += .SS;
+			if seg.reg == .DS then <<isa(uop.op, Cea) += .DS;
+		}
+		
+		if isa(uop.op, Direct_Address) {
+			isa(uop.op, Direct_Address).seg = seg.reg;
+		}
+	}
+	f :: (sop: *Shift_Op) #expand {
+		if isa(sop.dst, Cea) {
+			if seg.reg == .ES then <<isa(sop.dst, Cea) += .ES;
+			if seg.reg == .CS then <<isa(sop.dst, Cea) += .CS;
+			if seg.reg == .SS then <<isa(sop.dst, Cea) += .SS;
+			if seg.reg == .DS then <<isa(sop.dst, Cea) += .DS;
+		}
+		
+		if isa(sop.dst, Direct_Address) {
+			isa(sop.dst, Direct_Address).seg = seg.reg;
+		}
+	}
+		
+	#insert #run -> string {
+		FORMAT :: #string DONE
+%1
+while op := isa(inst, %2) {
+	defer break;
+	if is_subclass_of(type_info(%2), "Binary_Op")
+		f(cast(*Binary_Op) op);
+	if is_subclass_of(type_info(%2), "Jump")
+		f(cast(*Jump) op);
+	if is_subclass_of(type_info(%2), "Unary_Op")
+		f(cast(*Unary_Op) op);
+	if is_subclass_of(type_info(%2), "Shift_Op")
+		f(cast(*Shift_Op) op);
+}
+DONE;
+		str := "";
+		for inst.value_types {
+			str = tprint(FORMAT, str, it);
+		}
+		return str;
+	};
+
+	return inst, true;
+}
 
 int_op :: (stream: *[] u8) -> Instruction, bool {
 	op: INT;
@@ -444,6 +669,40 @@ ret_op :: (stream: *[] u8) -> Instruction, bool {
 	return wrap(ret), true;
 }
 
+jump_direct :: ($T: Type, $W := false, $S := false) -> Table_Entry_F {
+	return (stream: *[] u8) -> Instruction, bool {
+		op: T;
+
+		if stream.count < 1
+			return wrap(op), false;
+
+		s0 := next_u8(stream);
+
+		#if W {
+			if stream.count < 2
+				return wrap(op), false;
+			#if S {
+				set(*op.src, cast,no_check(s16) next_u16(stream));
+			} else {
+				set(*op.src, next_u16(stream));
+			}
+		} else {
+			if stream.count < 1
+				return wrap(op), false;
+			#if S {
+				op.disp = next_u8(stream);
+				if op.disp & 0b1000_0000
+					op.disp |= 0b1111_1111_0000_0000;
+			} else {
+				set(*op.src, next_u8(stream));
+			}
+				
+		}
+
+		return wrap(op), true;
+	};
+}
+
 jump_indirect :: ($T: Type, $far := false) -> Table_Entry_F {
 	return (stream: *[] u8) -> Instruction, bool {
 		op: T;
@@ -467,13 +726,15 @@ jump_indirect :: ($T: Type, $far := false) -> Table_Entry_F {
 			if direct_addr {
 				if stream.count < 2
 					return wrap(op), false;
-				set(*op.src, cast(Direct_Address) next_u16(stream));
+				set(*op.src, Direct_Address.{ addr = next_u16(stream) });
 			} else {
 				set(*op.src, cast(Cea) RM);
 				if disp == 8 {
 					if stream.count < 1
 						return wrap(op), false;
 					op.disp = next_u8(stream);
+					if op.disp & 0b1000_0000
+						op.disp |= 0b1111_1111_0000_0000;
 				}
 				else if disp == 16 {
 					if stream.count < 2
@@ -537,7 +798,7 @@ shift_op :: ($T: Type) -> Table_Entry_F {
 		if mod_reg {
 			set(*op.dst, cast(Reg) (2 * RM + W));
 		} else if direct_addr {
-			set(*op.dst, cast(Direct_Address) next_u16(stream));
+			set(*op.dst, Direct_Address.{ addr = next_u16(stream) });
 		} else {
 			set(*op.dst, cast(Cea) RM);
 			if disp == 8
@@ -597,7 +858,7 @@ binary_op_imm_rm :: ($T: Type, $USE_S := true) -> Table_Entry_F {
 			set(*op.dst, cast(Reg) (W + 2 *  RM));
 		} else {
 			if direct_addr {
-				set(*op.dst, cast(Direct_Address) next_u16(stream));
+				set(*op.dst, Direct_Address.{ addr = next_u16(stream) });
 			} else {
 				set(*op.dst, cast(Cea) RM);
 			}
@@ -676,14 +937,14 @@ binary_op_rm_r :: ($T: Type, $USE_D : bool = true, $DD := 0) -> Table_Entry_F {
 			if D == 0 {
 				set(*op.src, cast(Reg) (W + 2 * REG));
 				if direct_addr {
-					set(*op.dst, cast(Direct_Address) next_u16(stream));
+					set(*op.dst, Direct_Address.{ addr = next_u16(stream) });
 				} else {
 					set(*op.dst, cast(Cea) RM);
 				}
 			} else {
 				set(*op.dst, cast(Reg) (W + 2 * REG));
 				if direct_addr {
-					set(*op.src, cast(Direct_Address) next_u16(stream));
+					set(*op.src, Direct_Address.{ addr = next_u16(stream) });
 				} else {
 					set(*op.src, cast(Cea) RM);
 				}
@@ -766,7 +1027,7 @@ unary_rm :: ($T: Type, $USE_W := true, $WW := 0) -> Table_Entry_F {
 			set(*op.op, cast(Reg) (2 * RM + W));
 			return wrap(op), true;
 		} else if direct_addr {
-			set(*op.op, cast(Direct_Address) next_u16(stream));
+			set(*op.op, Direct_Address.{ addr = next_u16(stream) });
 		} else {
 			set(*op.op, cast(Cea) RM);
 			if disp == 8
@@ -893,7 +1154,9 @@ push_rm :: (stream: *[] u8) -> Instruction, bool {
 		set(*push.op, cast(Reg) (1 + 2 *  RM));
 	} else {
 		if direct_addr {
-			set(*push.op, cast(Direct_Address) next_u16(stream));
+			da: Direct_Address;
+			da.addr = next_u16(stream);
+			set(*push.op, da);
 		} else {
 			set(*push.op, cast(Cea) RM);
 		}
@@ -956,7 +1219,9 @@ pop_rm :: (stream: *[] u8) -> Instruction, bool {
 		set(*pop.op, cast(Reg) (1 + 2 *  RM));
 	} else {
 		if direct_addr {
-			set(*pop.op, cast(Direct_Address) next_u16(stream));
+			da: Direct_Address;
+			da.addr = next_u16(stream);
+			set(*pop.op, da);
 		} else {
 			set(*pop.op, cast(Cea) RM);
 		}
@@ -1019,7 +1284,7 @@ mov_mem_acc :: () -> Table_Entry_F {
 			set(*mov.dst, Reg.AL);
 		}
 
-		set(*mov.src, cast(Direct_Address) next_u16(stream));
+		set(*mov.src, Direct_Address.{ addr = next_u16(stream) });
 
 		return wrap(mov), true;
 	};
@@ -1042,7 +1307,9 @@ mov_acc_mem :: () -> Table_Entry_F {
 			set(*mov.src, Reg.AL);
 		}
 
-		set(*mov.dst, cast(Direct_Address) next_u16(stream));
+		da: Direct_Address;
+		da.addr = next_u16(stream);
+		set(*mov.dst, da);
 
 		return wrap(mov), true;
 	};
@@ -1209,8 +1476,18 @@ next :: (stream: *[] u8) -> Instruction, bool {
 	return a, b;
 }
 
+segment_string :: (cea: Cea) -> string {
+	if cast(Cea) ((cast(u8) Cea.ES) * ((cast(u8) cea) / (cast(u8) Cea.ES))) == {
+		case .ES; return "ES:";
+		case .CS; return "CS:";
+		case .SS; return "SS:";
+		case .DS; return "DS:";
+	}
+	return "";
+}
+
 serialize :: (cea: Cea) -> string {
-	if cea == {
+	if cast(Cea) ((cast(u8) cea) % (cast(u8) Cea.ES)) == {
 		case .BX_SI; return "BX + SI";
 		case .BX_DI; return "BX + DI";
 		case .BP_SI; return "BP + SI";
@@ -1239,7 +1516,7 @@ print :: (op: $T/Binary_Op) {
 		if isa(op.src, u16)
 			print("word ");
 
-		print("[%", serialize(<<dst));
+		print("%[%", segment_string(<<dst), serialize(<<dst));
 		if op.disp != 0 {
 			if op.disp > 0 print(" + %", op.disp);
 			if op.disp < 0 print(" - %", -op.disp);
@@ -1254,7 +1531,9 @@ print :: (op: $T/Binary_Op) {
 			print("word ");
 
 		dst_memory = true;
-		print("[%]", <<dst);
+		if dst.seg != .None
+			print("%:", dst.seg);
+		print("[%]", dst.addr);
 		break;
 	}
 	while dst := isa(op.dst, u8) {
@@ -1267,7 +1546,7 @@ print :: (op: $T/Binary_Op) {
 		break;
 	}
 	while src := isa(op.src, Cea) {
-		print("[%", serialize(<<src));
+		print("%[%", segment_string(<<src), serialize(<<src));
 		if op.disp != 0 {
 			if op.disp > 0 print(" + %", op.disp);
 			if op.disp < 0 print(" - %", -op.disp);
@@ -1276,7 +1555,9 @@ print :: (op: $T/Binary_Op) {
 		break;
 	}
 	while src := isa(op.src, Direct_Address) {
-		print("[%]", <<src);
+		if src.seg != .None
+			print("%:", src.seg);
+		print("[%]", src.addr);
 		break;
 	}
 	while src := isa(op.src, u16) {
@@ -1309,7 +1590,7 @@ print :: (op: $T/Unary_Op) {
 		if op.wide print("word ");
 		else       print("byte ");
 		
-		print("[%", serialize(<<reg));
+		print("%[%", segment_string(<<reg), serialize(<<reg));
 		if op.disp != 0 {
 			if op.disp > 0 print(" + %", op.disp);
 			if op.disp < 0 print(" - %", -op.disp);
@@ -1320,7 +1601,9 @@ print :: (op: $T/Unary_Op) {
 	while reg := isa(op.op, Direct_Address) {
 		if op.wide print("word ");
 		else       print("byte ");
-		print("[%]", <<reg);
+		if reg.seg != .None
+			print("%:", reg.seg);
+		print("[%]", reg.addr);
 		break;
 	}
 }
@@ -1335,7 +1618,7 @@ print :: (op: $T/Shift_Op) {
 		if op.wide print("word ");
 		else       print("byte ");
 		
-		print("[%", serialize(<<reg));
+		print("%[%", segment_string(<<reg), serialize(<<reg));
 		if op.disp != 0 {
 			if op.disp > 0 print(" + %", op.disp);
 			if op.disp < 0 print(" - %", -op.disp);
@@ -1346,6 +1629,8 @@ print :: (op: $T/Shift_Op) {
 	while reg := isa(op.dst, Direct_Address) {
 		if op.wide print("word ");
 		else       print("byte ");
+		if reg.seg != .None
+			print("%:", reg.seg);
 		print("[%]", <<reg);
 		break;
 	}
@@ -1395,7 +1680,7 @@ print :: (op: $T/Jump) {
 		break;
 	}
 	while reg := isa(op.src, Cea) {
-		print("[%", serialize(<<reg));
+		print("%[%", segment_string(<<reg), serialize(<<reg));
 		if op.disp != 0 {
 			if op.disp > 0 print(" + %", op.disp);
 			if op.disp < 0 print(" - %", -op.disp);
@@ -1404,8 +1689,22 @@ print :: (op: $T/Jump) {
 		break;
 	}
 	while reg := isa(op.src, Direct_Address) {
+		if reg.seg != .None
+			print("%:", reg.seg);
 		print("[%]", <<reg);
 		break;
+	}
+	while reg := isa(op.src, u16) {
+		defer break;
+		if op.has_direct_seg
+			print("%:", op.direct_seg);
+		print("%", <<reg);
+	}
+	while reg := isa(op.src, s16) {
+		defer break;
+		if op.has_direct_seg
+			print("%:", op.direct_seg);
+		print("$ + %", <<reg);
 	}
 
 }
