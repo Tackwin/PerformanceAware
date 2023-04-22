@@ -69,6 +69,18 @@ templates_base :: Template.[
 	.{ mask = "0011_10..", f = #run binary_op_rm_r(T = CMP) },
 	.{ mask = "0011_110.", f = #run binary_op_imm_acc(T = CMP) },
 
+	.{ mask = "0010_00..", f = #run binary_op_rm_r(T = AND) },
+	.{ mask = "0010_010.", f = #run binary_op_imm_acc(T = AND) },
+
+	.{ mask = "1000_01..", f = #run binary_op_rm_r(T = TEST) },
+	.{ mask = "1010_100.", f = #run binary_op_imm_acc(T = TEST) },
+
+	.{ mask = "0000_10..", f = #run binary_op_rm_r(T = OR) },
+	.{ mask = "0000_110.", f = #run binary_op_imm_acc(T = OR) },
+
+	.{ mask = "0011_00..", f = #run binary_op_rm_r(T = XOR) },
+	.{ mask = "0011_010.", f = #run binary_op_imm_acc(T = XOR) },
+
 	.{ mask = "0111_0100", f = #run cjmp(T = JE) },
 	.{ mask = "0111_1100", f = #run cjmp(T = JL) },
 	.{ mask = "0111_1110", f = #run cjmp(T = JLE) },
@@ -135,7 +147,7 @@ templates_base :: Template.[
 
 ];
 templates_grp1 :: Template.[
-	// .{ mask = "..00_0...", f = #run unary_rm(T = INC) },
+	.{ mask = "..00_0...", f = #run binary_op_imm_rm(T = TEST) },
 	// .{ mask = "..00_1...", f = #run unary_rm(T = DEC) },
 	.{ mask = "..01_0...", f = #run unary_rm(T = NOT) },
 	.{ mask = "..01_1...", f = #run unary_rm(T = NEG) },
@@ -156,23 +168,23 @@ templates_grp2 :: Template.[
 ];
 templates_immed :: Template.[
 	.{ mask = "..00_0...", f = #run binary_op_imm_rm(T = ADD) },
-	// .{ mask = "..00_1...", f = null },
+	.{ mask = "..00_1...", f = #run binary_op_imm_rm(T = OR) },
 	.{ mask = "..01_0...", f = #run binary_op_imm_rm(T = ADC) },
 	.{ mask = "..01_1...", f = #run binary_op_imm_rm(T = SBB) },
-	// .{ mask = "..10_0...", f = null },
+	.{ mask = "..10_0...", f = #run binary_op_imm_rm(T = AND) },
 	.{ mask = "..10_1...", f = #run binary_op_imm_rm(T = SUB) },
-	// .{ mask = "..11_0...", f = null },
+	.{ mask = "..11_0...", f = #run binary_op_imm_rm(T = XOR) },
 	.{ mask = "..11_1...", f = #run binary_op_imm_rm(T = CMP) }
 ];
 templates_shift :: Template.[
-	// .{ mask = "..00_0...", f = #run unary_rm(T = INC) },
-	// .{ mask = "..00_1...", f = #run unary_rm(T = DEC) },
-	// .{ mask = "..01_0...", f = null },
-	// .{ mask = "..01_1...", f = null },
-	// .{ mask = "..10_0...", f = null },
-	// .{ mask = "..10_1...", f = null },
+	.{ mask = "..00_0...", f = #run shift_op(T = ROL) },
+	.{ mask = "..00_1...", f = #run shift_op(T = ROR) },
+	.{ mask = "..01_0...", f = #run shift_op(T = RCL) },
+	.{ mask = "..01_1...", f = #run shift_op(T = RCR) },
+	.{ mask = "..10_0...", f = #run shift_op(T = SHL) },
+	.{ mask = "..10_1...", f = #run shift_op(T = SHR) },
 	// .{ mask = "..11_0...", f = push_rm },
-	// .{ mask = "..11_1...", f = null },
+	.{ mask = "..11_1...", f = #run shift_op(T = SAR) },
 ];
 
 #scope_export
@@ -232,6 +244,14 @@ Unary_Op :: struct {
 	disp: s16;
 }
 
+Shift_Op :: struct {
+	src: Tagged_Union(Reg, u8);
+	dst: Tagged_Union(Reg, Cea, Direct_Address);
+
+	wide := false;
+	disp: s16;
+}
+
 MOV :: struct { #as using base: Binary_Op; name :: "mov"; }
 ADD :: struct { #as using base: Binary_Op; name :: "add"; }
 ADC :: struct { #as using base: Binary_Op; name :: "adc"; }
@@ -244,6 +264,10 @@ OUT :: struct { #as using base: Binary_Op; name :: "out"; };
 LEA :: struct { #as using base: Binary_Op; name :: "lea"; };
 LDS :: struct { #as using base: Binary_Op; name :: "lds"; };
 LES :: struct { #as using base: Binary_Op; name :: "les"; };
+AND :: struct { #as using base: Binary_Op; name :: "and"; };
+TEST :: struct { #as using base: Binary_Op; name :: "test"; };
+OR :: struct { #as using base: Binary_Op; name :: "or"; };
+XOR :: struct { #as using base: Binary_Op; name :: "xor"; };
 
 PUSH :: struct { #as using base: Unary_Op; name :: "push"; };
 POP :: struct { #as using base: Unary_Op; name :: "pop"; };
@@ -291,13 +315,58 @@ AAD :: struct { #as using base: Nullary_Op; name :: "aad"; }
 CBW :: struct { #as using base: Nullary_Op; name :: "cbw"; }
 CWD :: struct { #as using base: Nullary_Op; name :: "cwd"; }
 
+SHL :: struct { #as using base: Shift_Op; name :: "shl"; }
+SHR :: struct { #as using base: Shift_Op; name :: "shr"; }
+SAR :: struct { #as using base: Shift_Op; name :: "sar"; }
+ROL :: struct { #as using base: Shift_Op; name :: "rol"; }
+ROR :: struct { #as using base: Shift_Op; name :: "ror"; }
+RCL :: struct { #as using base: Shift_Op; name :: "rcl"; }
+RCR :: struct { #as using base: Shift_Op; name :: "rcr"; }
+
 Instruction :: Tagged_Union(
 	PUSH, POP, INC, DEC, NEG, MUL, IMUL, DIV, IDIV, NOT,
-	MOV, ADD, ADC, SUB, SBB, CMP, XCHG, IN, OUT, LEA, LDS, LES,
+	MOV, ADD, ADC, SUB, SBB, CMP, XCHG, IN, OUT, LEA, LDS, LES, AND, TEST, OR, XOR,
 	JE, JL, JLE, JB, JBE, JP, JO, JS, JNZ, JGE, JG, JNB, JA, JNP, JNO, JNS, LOOP, LOOPZ, LOOPNZ,
 		JCXZ,
 	XLAT, LAHF, SAHF, PUSHF, POPF, AAA, DAA, AAS, DAS, AAM, AAD, CBW, CWD,
+	SHL, SHR, SAR, ROL, ROR, RCL, RCR,
 );
+
+shift_op :: ($T: Type) -> Table_Entry_F {
+	return (stream: *[] u8) -> Instruction, bool {
+		op: T;
+
+		if stream.count < 2
+			return wrap(op), false;
+
+		s0 := next_u8(stream);
+		s1 := next_u8(stream);
+	
+		V := (s0 & 0b0000_0010) >> 1;
+		W := (s0 & 0b0000_0001);
+		op.wide = ifx W then true else false;
+
+		MOD := (s1 & 0b1100_0000) >> 6;
+		RM := (s1 & 0b0000_0111);
+
+		disp, direct_addr, mod_reg := decode_mod_rm(MOD, RM);
+
+		if V set(*op.src, Reg.CL);
+		else set(*op.src, cast(u8) 1);
+		if mod_reg {
+			set(*op.dst, cast(Reg) (2 * RM + W));
+		} else if direct_addr {
+			set(*op.dst, cast(Direct_Address) next_u16(stream));
+		} else {
+			set(*op.dst, cast(Cea) RM);
+			if disp == 8
+				op.disp = next_u8(stream);
+			if disp == 16
+				op.disp = cast, no_check(s16) next_u16(stream);
+		}
+		return wrap(op), true;
+	};
+}
 
 binary_op_imm_acc :: ($T: Type) -> Table_Entry_F {
 	return (stream: *[] u8) -> Instruction, bool {
@@ -1071,6 +1140,41 @@ print :: (op: $T/Unary_Op) {
 		if op.wide print("word ");
 		else       print("byte ");
 		print("[%]", <<reg);
+		break;
+	}
+}
+
+print :: (op: $T/Shift_Op) {
+	print("% ", op.name);
+	while reg := isa(op.dst, Reg) {
+		print("%", <<reg);
+		break;
+	}
+	while reg := isa(op.dst, Cea) {
+		if op.wide print("word ");
+		else       print("byte ");
+		
+		print("[%", serialize(<<reg));
+		if op.disp != 0 {
+			if op.disp > 0 print(" + %", op.disp);
+			if op.disp < 0 print(" - %", -op.disp);
+		}
+		print("]");
+		break;
+	}
+	while reg := isa(op.dst, Direct_Address) {
+		if op.wide print("word ");
+		else       print("byte ");
+		print("[%]", <<reg);
+		break;
+	}
+	print(", ");
+	while reg := isa(op.src, Reg) {
+		print("%", <<reg);
+		break;
+	}
+	while reg := isa(op.src, u8) {
+		print("%", <<reg);
 		break;
 	}
 }
