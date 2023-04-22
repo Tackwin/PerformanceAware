@@ -40,7 +40,8 @@ decode_instruction_stream :: (stream: [] u8) {
 		inst, ok := next(*stream);
 		if !ok return;
 		print(inst);
-		print("\n");
+		if !isa(inst, REP) && !isa(inst, LOCK)
+			print("\n");
 	}
 }
 

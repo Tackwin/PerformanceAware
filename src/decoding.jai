@@ -145,6 +145,31 @@ templates_base :: Template.[
 	.{ mask = "1001_1000", f = #run nullary(T = CBW) },
 	.{ mask = "1001_1001", f = #run nullary(T = CWD) },
 
+	.{ mask = "1111_001.", f = rep_op },
+
+	.{ mask = "1010_010.", f = #run string_op(T = MOVS) },
+	.{ mask = "1010_011.", f = #run string_op(T = CMPS) },
+	.{ mask = "1010_111.", f = #run string_op(T = SCAS) },
+	.{ mask = "1010_110.", f = #run string_op(T = LODS) },
+	.{ mask = "1010_101.", f = #run string_op(T = STOS) },
+
+	.{ mask = "1100_.01.", f = ret_op },
+
+	.{ mask = "1100_110.", f = int_op },
+
+	.{ mask = "1100_1110", f = #run nullary(T = INTO) },
+	.{ mask = "1100_1111", f = #run nullary(T = IRET) },
+	.{ mask = "1111_1000", f = #run nullary(T = CLC) },
+	.{ mask = "1111_0101", f = #run nullary(T = CMC) },
+	.{ mask = "1111_1001", f = #run nullary(T = STC) },
+	.{ mask = "1111_1100", f = #run nullary(T = CLD) },
+	.{ mask = "1111_1101", f = #run nullary(T = STD) },
+	.{ mask = "1111_1010", f = #run nullary(T = CLI) },
+	.{ mask = "1111_1011", f = #run nullary(T = STI) },
+	.{ mask = "1111_0100", f = #run nullary(T = HLT) },
+	.{ mask = "1001_1011", f = #run nullary(T = WAIT) },
+	.{ mask = "1111_0000", f = #run nullary(T = LOCK) },
+
 ];
 templates_grp1 :: Template.[
 	.{ mask = "..00_0...", f = #run binary_op_imm_rm(T = TEST) },
@@ -159,10 +184,10 @@ templates_grp1 :: Template.[
 templates_grp2 :: Template.[
 	.{ mask = "..00_0...", f = #run unary_rm(T = INC) },
 	.{ mask = "..00_1...", f = #run unary_rm(T = DEC) },
-	// .{ mask = "..01_0...", f = null },
-	// .{ mask = "..01_1...", f = null },
-	// .{ mask = "..10_0...", f = null },
-	// .{ mask = "..10_1...", f = null },
+	.{ mask = "..01_0...", f = #run jump_indirect(T = CALL, far = false) },
+	.{ mask = "..01_1...", f = #run jump_indirect(T = CALL, far = true) },
+	.{ mask = "..10_0...", f = #run jump_indirect(T = JMP, far = false) },
+	.{ mask = "..10_1...", f = #run jump_indirect(T = JMP, far = true)},
 	.{ mask = "..11_0...", f = push_rm },
 	// .{ mask = "..11_1...", f = null },
 ];
@@ -226,6 +251,8 @@ Direct_Address :: #type,distinct u16;
 
 Nullary_Op :: struct { }
 
+Prefix :: struct { }
+
 Binary_Op :: struct {
 	src: Tagged_Union(Reg, Cea, Direct_Address, u8, u16);
 	dst: Tagged_Union(Reg, Cea, Direct_Address, u8);
@@ -235,6 +262,13 @@ Binary_Op :: struct {
 
 Conditional_Jump :: struct {
 	delta: s8;
+}
+
+Jump :: struct {
+	disp: s16;
+	far: bool;
+
+	src: Tagged_Union(Reg, Cea, Direct_Address, u8, u16);
 }
 
 Unary_Op :: struct {
@@ -250,6 +284,10 @@ Shift_Op :: struct {
 
 	wide := false;
 	disp: s16;
+}
+
+String_Op :: struct {
+	wide := false;
 }
 
 MOV :: struct { #as using base: Binary_Op; name :: "mov"; }
@@ -301,6 +339,9 @@ LOOPZ :: struct { #as using base: Conditional_Jump; name :: "loopz"; }
 LOOPNZ :: struct { #as using base: Conditional_Jump; name :: "loopnz"; }
 JCXZ :: struct { #as using base: Conditional_Jump; name :: "jcxz"; }
 
+CALL :: struct { #as using base: Jump; name :: "call"; }
+JMP :: struct { #as using base: Jump; name :: "jmp"; }
+
 XLAT :: struct { #as using base: Nullary_Op; name :: "xlat"; }
 LAHF :: struct { #as using base: Nullary_Op; name :: "lahf"; }
 SAHF :: struct { #as using base: Nullary_Op; name :: "sahf"; }
@@ -314,6 +355,17 @@ AAM :: struct { #as using base: Nullary_Op; name :: "aam"; }
 AAD :: struct { #as using base: Nullary_Op; name :: "aad"; }
 CBW :: struct { #as using base: Nullary_Op; name :: "cbw"; }
 CWD :: struct { #as using base: Nullary_Op; name :: "cwd"; }
+INTO :: struct { #as using base: Nullary_Op; name :: "into"; }
+IRET :: struct { #as using base: Nullary_Op; name :: "iret"; }
+CLC :: struct { #as using base: Nullary_Op; name :: "clc"; }
+CMC :: struct { #as using base: Nullary_Op; name :: "cmc"; }
+STC :: struct { #as using base: Nullary_Op; name :: "stc"; }
+CLD :: struct { #as using base: Nullary_Op; name :: "cld"; }
+STD :: struct { #as using base: Nullary_Op; name :: "std"; }
+CLI :: struct { #as using base: Nullary_Op; name :: "cli"; }
+STI :: struct { #as using base: Nullary_Op; name :: "sti"; }
+HLT :: struct { #as using base: Nullary_Op; name :: "hlt"; }
+WAIT :: struct { #as using base: Nullary_Op; name :: "wait"; }
 
 SHL :: struct { #as using base: Shift_Op; name :: "shl"; }
 SHR :: struct { #as using base: Shift_Op; name :: "shr"; }
@@ -323,14 +375,143 @@ ROR :: struct { #as using base: Shift_Op; name :: "ror"; }
 RCL :: struct { #as using base: Shift_Op; name :: "rcl"; }
 RCR :: struct { #as using base: Shift_Op; name :: "rcr"; }
 
+REP :: struct { #as using base: Prefix; name :: "rep"; Z := 0; }
+LOCK :: struct { #as using base: Prefix; name :: "lock"; }
+
+MOVS :: struct {#as using base: String_Op; name :: "movs"; }
+CMPS :: struct {#as using base: String_Op; name :: "cmps"; }
+SCAS :: struct {#as using base: String_Op; name :: "scas"; }
+LODS :: struct {#as using base: String_Op; name :: "lods"; }
+STOS :: struct {#as using base: String_Op; name :: "stos"; }
+
+RET :: struct { name :: "ret"; far := false; to_add: u16; }
+
+INT :: struct { name :: "int"; interrupt: u8; }
+
 Instruction :: Tagged_Union(
 	PUSH, POP, INC, DEC, NEG, MUL, IMUL, DIV, IDIV, NOT,
 	MOV, ADD, ADC, SUB, SBB, CMP, XCHG, IN, OUT, LEA, LDS, LES, AND, TEST, OR, XOR,
 	JE, JL, JLE, JB, JBE, JP, JO, JS, JNZ, JGE, JG, JNB, JA, JNP, JNO, JNS, LOOP, LOOPZ, LOOPNZ,
 		JCXZ,
-	XLAT, LAHF, SAHF, PUSHF, POPF, AAA, DAA, AAS, DAS, AAM, AAD, CBW, CWD,
+	CALL, JMP,
+	XLAT, LAHF, SAHF, PUSHF, POPF, AAA, DAA, AAS, DAS, AAM, AAD, CBW, CWD, INTO, IRET, CLC, CMC,
+	STC, CLD, STD, CLI, STI, HLT, WAIT,
 	SHL, SHR, SAR, ROL, ROR, RCL, RCR,
+	REP, LOCK,
+	MOVS, CMPS, SCAS, LODS, STOS,
+	RET,
+	INT,
 );
+
+int_op :: (stream: *[] u8) -> Instruction, bool {
+	op: INT;
+
+	if stream.count < 1
+		return wrap(op), false;
+	
+	s0 := next_u8(stream);
+
+	if s0 & 0b0000_0001 {
+		if stream.count < 1
+			return wrap(op), false;
+		op.interrupt = next_u8(stream);
+	} else {
+		op.interrupt = 3;
+	}
+
+	return wrap(op), true;
+}
+
+ret_op :: (stream: *[] u8) -> Instruction, bool {
+	ret: RET;
+
+	if stream.count < 1
+		return wrap(ret), false;
+	
+	s0 := next_u8(stream);
+
+	A := (s0 & 0b0000_0001) >> 0;
+	F := (s0 & 0b0000_1000) >> 3;
+	
+	ret.far = ifx F then true else false;
+
+	if !A && stream.count < 2
+		return wrap(ret), false;
+
+	if !A
+		ret.to_add = next_u16(stream);
+	
+	return wrap(ret), true;
+}
+
+jump_indirect :: ($T: Type, $far := false) -> Table_Entry_F {
+	return (stream: *[] u8) -> Instruction, bool {
+		op: T;
+		op.far = far;
+
+		if stream.count < 2
+			return wrap(op), false;
+
+		s0 := next_u8(stream);
+		s1 := next_u8(stream);
+
+		MOD := (s1 & 0b1100_0000) >> 6;
+		RM := (s1 & 0b0000_0111);
+
+		disp, direct_addr, mod_reg := decode_mod_rm(MOD, RM);
+
+		if mod_reg {
+			set(*op.src, cast(Reg) (2 * RM + 1));
+		}
+		else {
+			if direct_addr {
+				if stream.count < 2
+					return wrap(op), false;
+				set(*op.src, cast(Direct_Address) next_u16(stream));
+			} else {
+				set(*op.src, cast(Cea) RM);
+				if disp == 8 {
+					if stream.count < 1
+						return wrap(op), false;
+					op.disp = next_u8(stream);
+				}
+				else if disp == 16 {
+					if stream.count < 2
+						return wrap(op), false;
+					op.disp = cast,no_check(s16) next_u16(stream);
+				}
+			}
+		}
+
+		return wrap(op), true;
+	};
+}
+
+string_op :: ($T: Type) -> Table_Entry_F {
+	return (stream: *[] u8) -> Instruction, bool {
+		op: T;
+
+		if stream.count < 1
+			return wrap(op), false;
+
+		s0 := next_u8(stream);
+
+		op.wide = ifx (s0 & 0b0000_0001) then true else false;
+		return wrap(op), true;
+	};
+}
+
+rep_op :: (stream: *[] u8) -> Instruction, bool {
+	op: REP;
+
+	if stream.count < 1
+		return wrap(op), false;
+
+	s0 := next_u8(stream);
+	op.Z = (s0 & 0b0000_0001);
+
+	return wrap(op), true;
+}
 
 shift_op :: ($T: Type) -> Table_Entry_F {
 	return (stream: *[] u8) -> Instruction, bool {
@@ -1181,6 +1362,60 @@ print :: (op: $T/Shift_Op) {
 
 print :: (op: $T/Nullary_Op) {
 	print("%", op.name);
+}
+
+print :: (op: REP) {
+	print("rep ");
+}
+print :: (op: LOCK) {
+	print("lock ");
+}
+
+print :: (op: RET) {
+	print("ret");
+	if op.far print("f");
+	else      print("n");
+
+	if op.to_add > 0 print(" %", op.to_add);
+}
+
+print :: (op: $T/String_Op) {
+	print("%", op.name);
+	if op.wide print("w");
+	else       print("b");
+}
+
+print :: (op: $T/Jump) {
+	print("%", op.name);
+	if op.far print("f ");
+	else      print("n ");
+
+	while reg := isa(op.src, Reg) {
+		print("%", <<reg);
+		break;
+	}
+	while reg := isa(op.src, Cea) {
+		print("[%", serialize(<<reg));
+		if op.disp != 0 {
+			if op.disp > 0 print(" + %", op.disp);
+			if op.disp < 0 print(" - %", -op.disp);
+		}
+		print("]");
+		break;
+	}
+	while reg := isa(op.src, Direct_Address) {
+		print("[%]", <<reg);
+		break;
+	}
+
+}
+
+print :: (op: INT) {
+	if op.interrupt == 3 {
+		print("int3");
+	} else {
+		print("int %", op.interrupt);
+	}
 }
 
 print :: (inst: Instruction) {
