@@ -23,6 +23,8 @@ Reg :: enum {
 	CS :: 17;
 	SS :: 18;
 	DS :: 19;
+	IP :: 20;
+	FLAGS :: 21;
 	None;
 };
 

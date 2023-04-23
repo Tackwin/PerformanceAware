@@ -1488,3 +1488,11 @@ print :: (inst: Instruction) {
 		return str;
 	};
 }
+
+decode_instruction_stream :: (stream: [] u8, instructions: *[..] Instruction) {
+	while stream.count > 0 {
+		inst, ok := next(*stream);
+		if !ok return;
+		array_add(instructions, inst);
+	}
+}
